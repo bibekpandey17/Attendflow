@@ -142,6 +142,132 @@ app.post("/api/auth/login", async (req, res) => {
 });
 
 
+// ==========================================
+// EMPLOYEE ATTENDANCE ROUTES
+// ==========================================
+
+// Helper to get today's date string (YYYY-MM-DD)
+const getTodayDateString = () => new Date().toISOString().split("T")[0];
+
+// Employee Check-In
+app.post("/api/attendance/check-in", verifyToken, async (req, res) => {
+  try {
+    const employeeId = req.user.id;
+    const today = getTodayDateString();
+
+    let attendance = await Attendance.findOne({ employee: employeeId, date: today });
+    if (attendance && attendance.checkInTime) {
+      return res.status(400).json({ success: false, message: "Already checked in today." });
+    }
+
+    const now = new Date();
+    // Optional: Determine if late (e.g., after 9:30 AM)
+    const isLate = now.getHours() > 9 || (now.getHours() === 9 && now.getMinutes() > 30);
+    const status = isLate ? "Late" : "Present";
+
+    if (!attendance) {
+      attendance = new Attendance({
+        employee: employeeId,
+        date: today,
+        checkInTime: now,
+        status,
+      });
+    } else {
+      attendance.checkInTime = now;
+      attendance.status = status;
+    }
+
+    await attendance.save();
+    res.json({ success: true, message: "Checked in successfully.", data: attendance });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Employee Check-Out
+app.post("/api/attendance/check-out", verifyToken, async (req, res) => {
+  try {
+    const employeeId = req.user.id;
+    const today = getTodayDateString();
+
+    const attendance = await Attendance.findOne({ employee: employeeId, date: today });
+    if (!attendance || !attendance.checkInTime) {
+      return res.status(400).json({ success: false, message: "You must check in first." });
+    }
+    if (attendance.checkOutTime) {
+      return res.status(400).json({ success: false, message: "Already checked out today." });
+    }
+
+    attendance.checkOutTime = new Date();
+    await attendance.save();
+
+    res.json({ success: true, message: "Checked out successfully.", data: attendance });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Get Attendance Calendar (For logged-in Employee or Specific Employee for Admin)
+app.get("/api/attendance/my-records", verifyToken, async (req, res) => {
+  try {
+    const employeeId = req.user.id;
+    const records = await Attendance.find({ employee: employeeId }).sort({ date: -1 });
+    res.json({ success: true, data: records });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ==========================================
+// ADMIN DASHBOARD & MANAGEMENT ROUTES
+// ==========================================
+
+// Get All Employees Attendance (Filter by date optional via query `?date=YYYY-MM-DD`)
+app.get("/api/admin/attendance", verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const { date } = req.query;
+    let query = {};
+    if (date) {
+      query.date = date;
+    }
+
+    const records = await Attendance.find(query)
+      .populate("employee", "name email department phone")
+      .sort({ date: -1 });
+
+    res.json({ success: true, data: records });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Get Individual Employee Full Record (Admin view)
+app.get("/api/admin/employee/:id/attendance", verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const employeeId = req.parms.id;
+    const employee = await User.findById(employeeId).select("-password");
+    if (!employee) {
+      return res.status(404).json({ success: false, message: "Employee not found." });
+    }
+
+    const records = await Attendance.find({ employee: employeeId }).sort({ date: -1 });
+    res.json({ success: true, employee, data: records });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Get list of all employees (for admin dropdowns/lists)
+app.get("/api/admin/employees", verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const employee = await User.find({ role: "employee" }).select("-password");
+    res.json({ success: true, data: employee });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+
 // --- Start Server ---
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
